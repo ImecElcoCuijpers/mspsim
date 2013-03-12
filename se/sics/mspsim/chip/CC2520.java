@@ -35,6 +35,7 @@
  */
 
 package se.sics.mspsim.chip;
+import java.util.Arrays;
 import se.sics.mspsim.core.*;
 import se.sics.mspsim.core.EmulationLogger.WarningType;
 import se.sics.mspsim.util.ArrayFIFO;
@@ -245,6 +246,30 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
 //    public static final int RAM_TXNONCE             = 0x140;
 //    public static final int RAM_CBCSTATE            = 0x150;
 
+    private static final byte REG_RESET_VALUES[] = {
+        0x00,0x0d,  0x01,0x78,  0x02,0x07,  0x0c,0x40,  0x0d,0x01,  0x1d,0x12,
+        0x1f,0x12,  0x21,0x27,  0x22,0x28,  0x23,0x29,  0x24,0x2a,
+        0x25,(byte)0x90,  0x26,0x3f,  0x2a,0x01,  0x2e,0x0b,  0x2f,0x0f,
+        0x30,0x06,  0x31,(byte)0x91,  0x34,0x40,  0x35,0x01,  0x36,(byte)0xe0,
+        0x37,0x1a,  0x38,(byte)0x80,  0x40,(byte)0x84,  0x44,0x20,  0x46,0x45,
+        0x47,0x2e,  0x4a,0x29,  0x4c,0x55,  0x4e,0x24,  0x4f,0x01,  0x50,0x20,
+        0x51,0x2a,  0x52,0x5f,  0x53,0x0e,  0x54,(byte)0xfe,  0x55,0x2e,
+        0x56,0x66,  0x57,0x0a,  0x58,0x05,  0x5a,0x05,  0x5b,0x08,  0x7e,0x02
+    };
+
+    /* From CC2520 datasheet, table 17 */
+    private static final byte TXPOWER_VALUES[] = {
+        (byte)0x03, -18, /* -18 dBm */
+        (byte)0x2c,  -7, /*  -7 dBm */
+        (byte)0x88,  -4, /*  -4 dBm */
+        (byte)0x81,  -2, /*  -2 dBm */
+        (byte)0x32,   0, /*   0 dBm */
+        (byte)0x13,   1, /*   1 dBm */
+        (byte)0xab,   2, /*   2 dBm */
+        (byte)0xf2,   3, /*   3 dBm */
+        (byte)0xf7,   5  /*   5 dBm */
+    };
+
     /* one single byte instruction can be stored in the IBUF */
     int instructionBuffer = 0;
 
@@ -351,7 +376,10 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
     /* low RSSI => CCA = true in normal mode */
 
     private int rssi = -100;
-    private static int RSSI_OFFSET = -45; /* cc2520 datasheet */
+    private static final int RSSI_OFFSET = -45; /* cc2520 datasheet */
+
+    /* Transmission power indicator */
+    private int txPowerIndicator = 0;
 
     /* This is the magical LQI */
     private int corrval = 37;
@@ -522,32 +550,26 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
     }
 
     private void reset() {
-        // FCF max fram version = 3 and frame filtering enabled
-        memory[REG_FRMFILT0] = 0x0d;
-        frameFilter = true;
-        memory[REG_FRMFILT1] = 0x78;
+        // Reset all register values
+        Arrays.fill(memory, 0, 0x80, 0);
+        for(int i = 0, n = REG_RESET_VALUES.length; i < n; i += 2) {
+            memory[REG_RESET_VALUES[i]] = REG_RESET_VALUES[i + 1] & 0xff;
+        }
+
+        // FCF max frame version = 3 and frame filtering enabled
         // autocrc enabled, autoack disabled
-        memory[REG_FRMCTRL0] = 0x40;
+        frameFilter = true;
         autoCRC = true;
         autoAck = false;
-
-        memory[REG_MDMCTRL0] = 0x45;
-        memory[REG_MDMCTRL1] = 0x3e;
-        memory[REG_FSMSTAT0] = 0;
-        memory[REG_FSMSTAT1] = 0;
-        memory[REG_RSSISTAT] = 0;
-        memory[REG_TXPOWER] = 0x06;
-        memory[REG_FIFOPCTRL] = fifopThr = 0x40;
-        memory[REG_FREQCTRL] = 0x0b;
-
-        /* back to default configuration of GPIOs */
-        memory[REG_GPIOPOLARITY] = 0x3f;
+        fifopThr = memory[REG_FIFOPCTRL];
         updateGPIOConfig();
 
         fifoGPIO = gpio[1];
         fifopGPIO = gpio[2];
         ccaGPIO = gpio[3];
         sfdGPIO = gpio[4];
+
+        updateTxPower();
 
         setFIFO(false);
         setFIFOP(false);
@@ -888,7 +910,7 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
             autoAck = (data & AUTOACK) != 0;
             break;
         case REG_TXPOWER:
-            if (!isDefinedTxPower(data)) {
+            if (!updateTxPower()) {
                 logw(WarningType.EXECUTION, "*** Warning - writing an undefined TXPOWER value (0x"
                         + Utils.hex8(data) + ") to CC2520!!!");
             }
@@ -1353,104 +1375,45 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
         return rssi;
     }
 
-    private boolean isDefinedTxPower(int txpower) {
-        switch (txpower) {
-        case 0xf7:
-        case 0xf2:
-        case 0xab:
-        case 0x88:
-        case 0x81:
-        case 0x32:
-        case 0x2c:
-        case 0x13:
-        case 0x03:
-            return true;
-        default:
-            return false;
+    private boolean updateTxPower() {
+        // Higher TXPOWER value does not always give higher transmission power.
+        // The output power is mapped into classes of the recommended TXPOWER
+        // values, see table 17 in the CC2520 datasheet. Any other TXPOWER value
+        // has undefined behavior and should be avoided.
+        int txpower = memory[REG_TXPOWER];
+        for (int i = 0, n = TXPOWER_VALUES.length; i < n; i += 2) {
+            if (txpower == (TXPOWER_VALUES[i] & 0xff)) {
+                txPowerIndicator = 1 + i / 2;
+                return true;
+            }
         }
+        txPowerIndicator = 0;
+        return false;
     }
 
     @Override
     public int getOutputPowerIndicator() {
-        // Higher TXPOWER value does not always mean higher transmission power.
-        // Instead of using the TXPOWER value, the output power is mapped into 9 classes.
-        int txpower = memory[REG_TXPOWER];
-        if (txpower >= 0xf7) {
-            return 9;
-        }
-        if (txpower >= 0xf2) {
-            return 8;
-        }
-        if (txpower >= 0xab) {
-            return 7;
-        }
-        if (txpower >= 0x88) {
-            return 3;
-        }
-        if (txpower >= 0x81) {
-            return 4;
-        }
-        if (txpower >= 0x32) {
-            return 5;
-        }
-        if (txpower >= 0x2c) {
-            return 2;
-        }
-        if (txpower >= 0x13) {
-            return 6;
-        }
-        if (txpower >= 0x03) {
-            return 1;
-        }
-        /* Unknown */
-        return 0;
-//        return memory[REG_TXPOWER];
+        return txPowerIndicator;
     }
 
     @Override
     public int getOutputPowerIndicatorMax() {
-        return 9;
-//        return 255;
+        return TXPOWER_VALUES.length / 2;
     }
 
     @Override
     public int getOutputPower() {
-        /* From CC2520 datasheet, table 17 */
-        int txpower = memory[REG_TXPOWER];
-        if (txpower >= 0xf7) {
-            return 5;
+        int output = txPowerIndicator;
+        if (output > 0) {
+            return TXPOWER_VALUES[output * 2 - 1];
         }
-        if (txpower >= 0xf2) {
-            return 3;
-        }
-        if (txpower >= 0xab) {
-            return 2;
-        }
-        if (txpower >= 0x88) {
-            return -4;
-        }
-        if (txpower >= 0x81) {
-            return -2;
-        }
-        if (txpower >= 0x32) {
-            return 0;
-        }
-        if (txpower >= 0x2c) {
-            return -7;
-        }
-        if (txpower >= 0x13) {
-            return 1;
-        }
-        if (txpower >= 0x03) {
-            return -18;
-        }
-        /* Unknown */
+        /* Undefined transmission power */
         return -100;
     }
 
     @Override
     public int getOutputPowerMax() {
-        return 5;
+        return TXPOWER_VALUES[TXPOWER_VALUES.length - 1];
     }
 
     @Override
@@ -1538,7 +1501,7 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
                 "  ShortAddr: 0x" + Utils.hex8(memory[RAM_SHORTADDR + 1]) + Utils.hex8(memory[RAM_SHORTADDR]) +
                 "  LongAddr: 0x" + getLongAddress() +
                 "\n Channel: " + activeChannel +
-                "  Output Power: " + getOutputPower() + "dB (" + getOutputPowerIndicator() + '/' + getOutputPowerIndicatorMax() +
+                "  Output Power: " + getOutputPower() + "dBm (" + getOutputPowerIndicator() + '/' + getOutputPowerIndicatorMax() +
                 ") txpower: 0x" + Utils.hex8(memory[REG_TXPOWER]) +
                 "\n";
     }
