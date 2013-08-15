@@ -398,11 +398,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
   private boolean overflow = false;
   private boolean frameRejected = false;
 
-  public interface StateListener {
-    public void newState(RadioState state);
-  }
-
-  private StateListener stateListener = null;
   private int ackPos;
   /* type = 2 (ACK), third byte needs to be sequence number... */
   private int[] ackBuf = {0x05, 0x02, 0x00, 0x00, 0x00, 0x00};
@@ -412,14 +407,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
 
   private ArrayFIFO rxFIFO;
   
-  public void setStateListener(StateListener listener) {
-    stateListener = listener;
-  }
-
-  public RadioState getState() {
-      return stateMachine;
-  }
-
   public CC2420(MSP430Core cpu) {
       super("CC2420", "Radio", cpu);
       rxFIFO = new ArrayFIFO("RXFIFO", memory, RAM_RXFIFO, 128);
@@ -439,7 +426,11 @@ public class CC2420 extends Radio802154 implements USARTListener {
       setReg(REG_MDMCTRL0, 0x0ae2);
       setReg(REG_FSCTRL, 0x4165);
   }
-  
+
+  public RadioState getState() {
+      return stateMachine;
+  }
+
   private boolean setState(RadioState state) {
     if(logLevel > INFO) log("State transition from " + stateMachine + " to " + state);
     stateMachine = state;
@@ -560,10 +551,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
         break;
     }
 
-    /* Notify state listener */
-    if (stateListener != null) {
-        stateListener.newState(stateMachine);
-    }
     stateChanged(stateMachine.state);
 
     return true;
@@ -1518,10 +1505,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
     "\n Channel: " + activeChannel +
     "  Output Power: " + getOutputPower() + "dB (" + getOutputPowerIndicator() + '/' + getOutputPowerIndicatorMax() +
     ")\n";
-  }
-
-  @Override
-  protected void stateChanged(int state) {
   }
 
   /* return data in register at the correct position */
