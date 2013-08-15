@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2007-2012 Swedish Institute of Computer Science.
+ * Copyright (c) 2007-2013 Swedish Institute of Computer Science.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -129,9 +129,9 @@ public class CC2420 extends Radio802154 implements USARTListener {
 
   public static final int STATUS_XOSC16M_STABLE = 1 << 6;
   public static final int STATUS_TX_UNDERFLOW   = 1 << 5;
-  public static final int STATUS_ENC_BUSY	    = 1 << 4;
+  public static final int STATUS_ENC_BUSY	= 1 << 4;
   public static final int STATUS_TX_ACTIVE	= 1 << 3;
-  public static final int STATUS_LOCK	= 1 << 2;
+  public static final int STATUS_LOCK	        = 1 << 2;
   public static final int STATUS_RSSI_VALID	= 1 << 1;
 
   // IOCFG0 Register Bit masks
@@ -258,11 +258,17 @@ public class CC2420 extends Radio802154 implements USARTListener {
   private int zeroSymbols;
   private boolean ramRead = false;
 
-  /* RSSI is an externally set value of the RSSI for this CC2420 */
+  /* RSSI is an externally set value in dB of the RSSI for this CC2420 */
   /* low RSSI => CCA = true in normal mode */
 
   private int rssi = -100;
-  private static int RSSI_OFFSET = -45; /* cc2420 datasheet */
+  private static final int RSSI_OFFSET = -45; /* cc2420 datasheet */
+
+  /* CCA Hysteresis (dB) and CCA mode */
+  private int ccaHyst = 2;
+  private int ccaMode = 3;
+  /* CCA Threshold (dB) */
+  private int ccaThr = -77;
   /* current CCA value */
   private boolean cca = false;
 
@@ -289,7 +295,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
   private int activeFrequency = 0;
   private int activeChannel = 0;
 
-  //private int status = STATUS_XOSC16M_STABLE | STATUS_RSSI_VALID;
   private int status = 0;
 
   private int[] registers = new int[64];
@@ -301,23 +306,23 @@ public class CC2420 extends Radio802154 implements USARTListener {
 
   private boolean chipSelect;
 
-  private IOPort ccaPort = null;
+  private IOPort ccaPort;
   private int ccaPin;
 
-  private IOPort fifopPort = null;
+  private IOPort fifopPort;
   private int fifopPin;
 
-  private IOPort fifoPort = null;
+  private IOPort fifoPort;
   private int fifoPin;
 
-  private IOPort sfdPort = null;
+  private IOPort sfdPort;
   private int sfdPin;
 
   private int txCursor;
   private boolean on;
 
   private TimeEvent oscillatorEvent = new TimeEvent(0, "CC2420 OSC") {
-    public void execute(long t) {
+    @Override public void execute(long t) {
       status |= STATUS_XOSC16M_STABLE;
       if (logLevel > INFO) log("Oscillator Stable Event.");
       setState(RadioState.IDLE);
@@ -330,7 +335,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
   };
 
   private TimeEvent vregEvent = new TimeEvent(0, "CC2420 VREG") {
-    public void execute(long t) {
+    @Override public void execute(long t) {
       if(logLevel > INFO) log("VREG Started at: " + t + " cyc: " +
           cpu.cycles + " " + getTime());
       on = true;
@@ -340,25 +345,25 @@ public class CC2420 extends Radio802154 implements USARTListener {
   };
 
   private TimeEvent sendEvent = new TimeEvent(0, "CC2420 Send") {
-    public void execute(long t) {
+    @Override public void execute(long t) {
       txNext();
     }
   };
 
   private TimeEvent ackEvent = new TimeEvent(0, "CC2420 Ack") {
-      public void execute(long t) {
+    @Override public void execute(long t) {
         ackNext();
       }
     };
   
   private TimeEvent shrEvent = new TimeEvent(0, "CC2420 SHR") {
-    public void execute(long t) {
+    @Override public void execute(long t) {
       shrNext();
     }
   };
 
   private TimeEvent symbolEvent = new TimeEvent(0, "CC2420 Symbol") {
-    public void execute(long t) {
+    @Override public void execute(long t) {
       switch(stateMachine) {
       case RX_CALIBRATE:
         setState(RadioState.RX_SFD_SEARCH);
@@ -380,6 +385,9 @@ public class CC2420 extends Radio802154 implements USARTListener {
       case TX_ACK_CALIBRATE:
           setState(RadioState.TX_ACK_PREAMBLE);
           break;
+      default:
+        // Ignore all other states
+        break;
       }
     }
   };
@@ -423,11 +431,13 @@ public class CC2420 extends Radio802154 implements USARTListener {
     currentFIFOP = false;
     rxFIFO.reset();
     overflow = false;
+    setRSSI(rssi);
     reset();
   }
   
   private void reset() {
       setReg(REG_MDMCTRL0, 0x0ae2);
+      setReg(REG_FSCTRL, 0x4165);
   }
   
   private boolean setState(RadioState state) {
@@ -469,7 +479,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
       if ((status & STATUS_RSSI_VALID) == 0) {
           setSymbolEvent(8);
       }
-//      status |= STATUS_RSSI_VALID;
       updateCCA();
       setMode(MODE_RX_ON);
       break;
@@ -502,6 +511,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
     case RX_WAIT:
       setSymbolEvent(8);
       setMode(MODE_RX_ON);
+      updateCCA();
       break;
       
     case IDLE:
@@ -516,6 +526,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
         status |= STATUS_TX_ACTIVE;
         setSymbolEvent(12 + 2 + 2);
         setMode(MODE_TXRX_ON);
+        updateCCA();
       break;
     case TX_ACK_PREAMBLE:
         /* same as normal preamble ?? */
@@ -540,6 +551,12 @@ public class CC2420 extends Radio802154 implements USARTListener {
         frameRejected = false;
         shouldAck = false;
         crcOk = false;
+        updateCCA();
+        break;
+
+    case RX_OVERFLOW:
+        break;
+    case TX_UNDERFLOW:
         break;
     }
 
@@ -567,6 +584,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
   /* Receive a byte from the radio medium
    * @see se.sics.mspsim.chip.RFListener#receivedByte(byte)
    */
+  @Override
   public void receivedByte(byte data) {
       // Received a byte from the "air"
 
@@ -734,30 +752,37 @@ public class CC2420 extends Radio802154 implements USARTListener {
       case REG_IOCFG1:
           if (logLevel > INFO)
             log("IOCFG1: SFDMUX "
-                          + ((registers[address] & SFDMUX) >> SFDMUX)
-                          + " CCAMUX: " + (registers[address] & CCAMUX));
+                          + ((data & SFDMUX) >> 5)
+                          + " CCAMUX: " + (data & CCAMUX));
           updateCCA();
           break;
       case REG_MDMCTRL0:
           addressDecode = (data & ADR_DECODE) != 0;
           autoCRC = (data & ADR_AUTOCRC) != 0;
           autoAck = (data & AUTOACK) != 0;
+          ccaHyst = (data >> 8) & 7;
+          ccaMode = (data >> 6) & 3;
+          updateCCA();
           break;
       case REG_FSCTRL: {
           ChannelListener listener = this.channelListener;
-          if (listener != null) {
-              int oldChannel = activeChannel;
-              updateActiveFrequency();
-              if (oldChannel != activeChannel) {
-                  listener.channelChanged(activeChannel);
-              }
+          int oldChannel = activeChannel;
+          updateActiveFrequency();
+          if (oldChannel != activeChannel && listener != null) {
+            listener.channelChanged(activeChannel);
           }
           break;
       }
+      case REG_RSSI:
+          registers[address] = (data & 0xff00) | (oldValue & 0xff);
+          ccaThr = ((byte)((data >> 8) & 0xff)) + RSSI_OFFSET;
+          updateCCA();
+          break;
       }
       configurationChanged(address, oldValue, data);
   }
 
+  @Override
   public void dataReceived(USARTSource source, int data) {
     int oldStatus = status;
     if (logLevel > INFO) {
@@ -954,7 +979,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
     case REG_SRXON:
       if(stateMachine == RadioState.IDLE) {
         setState(RadioState.RX_CALIBRATE);
-        //updateActiveFrequency();
         if (logLevel > INFO) {
             log("Strobe RX-ON!!!");
         }
@@ -1193,19 +1217,28 @@ public class CC2420 extends Radio802154 implements USARTListener {
 
     if (ccaMux == CCAMUX_CCA) {
       /* If RSSI is less than -95 then we have CCA / clear channel! */
-      cca = (status & STATUS_RSSI_VALID) > 0 && rssi < -95;
+        switch (ccaMode) {
+        case 0: /* reserved */
+            break;
+        case 1: /* Clear channel when RSSI is below threshold */
+            cca = (status & STATUS_RSSI_VALID) > 0 && rssi < (ccaThr - ccaHyst);
+            break;
+        case 2: /* Clear channel when not receiving packet */
+            cca = stateMachine != RadioState.RX_FRAME;
+            break;
+        case 3: /* Clear channel when not receiving and RSSI is below threshold */
+            cca = stateMachine != RadioState.RX_FRAME
+                    && (status & STATUS_RSSI_VALID) > 0
+                    && rssi < (ccaThr - ccaHyst);
+            break;
+        }
     } else if (ccaMux == CCAMUX_XOSC16M_STABLE) {
       cca = (status & STATUS_XOSC16M_STABLE) > 0;
     }
     
     if (cca != oldCCA) {
-      setInternalCCA(cca);
+      setCCA(cca);
     }
-  }
-
-  private void setInternalCCA(boolean clear) {
-    setCCA(clear);
-    if (logLevel > INFO) log("Internal CCA: " + clear);
   }
 
   private void setSFD(boolean sfd) {
@@ -1254,6 +1287,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
     overflow = true;
     shouldAck = false;
     setState(RadioState.RX_OVERFLOW);
+    updateCCA();
   }
   
   
@@ -1266,26 +1300,30 @@ public class CC2420 extends Radio802154 implements USARTListener {
       return getState() == RadioState.RX_SFD_SEARCH;
   }
 
-  public void updateActiveFrequency() {
-    /* INVERTED: f = 5 * (c - 11) + 357 + 0x4000 */
-    activeFrequency = registers[REG_FSCTRL] - 357 + 2405 - 0x4000;
-    activeChannel = (registers[REG_FSCTRL] - 357 - 0x4000)/5 + 11;
+  private void updateActiveFrequency() {
+    /* FREQ = 5 * (c - 11) + 357 */
+    /* Frequency = FREQ + 2048 */
+    int freq = (registers[REG_FSCTRL] & 0x3ff);
+    activeFrequency = freq + 2048;
+    activeChannel = (freq - 357) / 5 + 11;
   }
 
+  @Override
   public int getActiveFrequency() {
-    updateActiveFrequency();
     return activeFrequency;
   }
 
+  @Override
   public int getActiveChannel() {
-    updateActiveFrequency();
     return activeChannel;
   }
 
+  @Override
   public int getOutputPowerIndicator() {
     return (registers[REG_TXCTRL] & 0x1f);
   }
 
+  @Override
   public int getOutputPowerIndicatorMax() {
       return 31;
   }
@@ -1295,16 +1333,19 @@ public class CC2420 extends Radio802154 implements USARTListener {
    * @param lqi The Corr-val
    * @sa CC2420 Datasheet
    */
+  @Override
   public void setLQI(int lqi){
       if(lqi < 0) lqi = 0;
       else if(lqi > 0x7f ) lqi = 0x7f;
       corrval = lqi;
   }
 
+  @Override
   public int getLQI() {
       return corrval;
   }
 
+  @Override
   public void setRSSI(int power) {
     final int minp = -128 + RSSI_OFFSET;
     final int maxp = 128 + RSSI_OFFSET;
@@ -1318,14 +1359,16 @@ public class CC2420 extends Radio802154 implements USARTListener {
     if (logLevel > INFO) log("external setRSSI to: " + power);
 
     rssi = power;
-    registers[REG_RSSI] = power - RSSI_OFFSET;
+    registers[REG_RSSI] = (registers[REG_RSSI] & 0xff00) | ((power - RSSI_OFFSET) & 0xff);
     updateCCA();
   }
 
+  @Override
   public int getRSSI() {
     return rssi;
   }
 
+  @Override
   public int getOutputPower() {
     /* From CC2420 datasheet */
     int indicator = getOutputPowerIndicator();
@@ -1356,6 +1399,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
       return 0;
   }
 
+  @Override
   public void notifyReset() {
     super.notifyReset();
     setChipSelect(false);
@@ -1432,13 +1476,14 @@ public class CC2420 extends Radio802154 implements USARTListener {
   }
 
   public void setRegister(int register, int data) {
-    registers[register] = data;
+    setReg(register, data);
   }
 
   /*****************************************************************************
    * Chip APIs
    *****************************************************************************/
 
+  @Override
   public int getModeMax() {
     return MODE_MAX;
   }
@@ -1454,14 +1499,16 @@ public class CC2420 extends Radio802154 implements USARTListener {
       return sb.toString();
   }
 
+  @Override
   public String info() {
-    updateActiveFrequency();
     return " VREG_ON: " + on + "  Chip Select: " + chipSelect +
     "  OSC Stable: " + ((status & STATUS_XOSC16M_STABLE) > 0) + 
-    "\n RSSI Valid: " + ((status & STATUS_RSSI_VALID) > 0) + "  CCA: " + cca +
+    "\n RSSI Valid: " + ((status & STATUS_RSSI_VALID) > 0) + "  RSSI: " + rssi +
+    "dB\n CCA: " + cca + " threshold: " + ccaThr + "dB hysteris: " + ccaHyst +
+    "dB mode: " + ccaMode +
     "\n FIFOP: " + currentFIFOP + " threshold: " + fifopThr +
     " polarity: " + ((registers[REG_IOCFG0] & FIFOP_POLARITY) == FIFOP_POLARITY) +
-    "  FIFO: " + currentFIFO + "  SFD: " + currentSFD + 
+    "\n FIFO: " + currentFIFO + "  SFD: " + currentSFD +
     "\n " + rxFIFO.stateToString() + " expPacketLen: " + rxlen +
     "\n Radio State: " + stateMachine + "  SPI State: " + state + 
     "\n AutoACK: " + autoAck + "  AddrDecode: " + addressDecode + "  AutoCRC: " + autoCRC +
@@ -1473,10 +1520,12 @@ public class CC2420 extends Radio802154 implements USARTListener {
     ")\n";
   }
 
-  public void stateChanged(int state) {
+  @Override
+  protected void stateChanged(int state) {
   }
 
   /* return data in register at the correct position */
+  @Override
   public int getConfiguration(int parameter) {
       return registers[parameter];
   }
