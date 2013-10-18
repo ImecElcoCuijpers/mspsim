@@ -152,6 +152,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
   public static final int CCAMUX_XOSC16M_STABLE = 24;
 
   // MDMCTRO0 values
+  public static final int PAN_COORDINATOR = (1 << 12);
   public static final int ADR_DECODE = (1 << 11);
   public static final int ADR_AUTOCRC = (1 << 5);
   public static final int AUTOACK = (1 << 4);
@@ -261,12 +262,20 @@ public class CC2420 extends Radio802154 implements USARTListener {
   /* FIFOP Threshold */
   private int fifopThr = 64;
 
-  /* if autoack is configured or if */
+  /* if autoack is configured or not */
   private boolean autoAck = false;
   private boolean shouldAck = false;
   private boolean addressDecode = false;
   private boolean ackRequest = false;
   private boolean autoCRC = false;
+
+  /* variables for the address recognition */
+  private int destinationAddressMode = 0;
+  private int sourceAddressMode = 0;
+  private boolean decodeAddress = false;
+
+  /* if device is pan coordinator or not */
+  private boolean isPanCoordinator = false;
 
   // Data from last received packet
   private int dsn = 0;
@@ -468,6 +477,9 @@ public class CC2420 extends Radio802154 implements USARTListener {
        */
       setSymbolEvent(12 + 2);
       setMode(MODE_TXRX_ON);
+
+      // Reset CRC ok flag to disable software acknowledgments until next received packet 
+      crcOk = false;
       break;
 
     case TX_PREAMBLE:
@@ -477,13 +489,12 @@ public class CC2420 extends Radio802154 implements USARTListener {
       SHR[2] = 0;
       SHR[3] = 0;
       SHR[4] = 0x7A;
+
       shrNext();
       break;
 
     case TX_FRAME:
       txfifoPos = 0;
-      // Reset CRC ok flag to disable software acknowledgments until next received packet 
-      crcOk = false;
       txNext();
       break;
 
@@ -504,7 +515,9 @@ public class CC2420 extends Radio802154 implements USARTListener {
         status |= STATUS_TX_ACTIVE;
         setSymbolEvent(12 + 2 + 2);
         setMode(MODE_TXRX_ON);
-      break;
+        // Reset CRC ok flag to disable software acknowledgments until next received packet 
+        crcOk = false;
+        break;
     case TX_ACK_PREAMBLE:
         /* same as normal preamble ?? */
         shrPos = 0;
@@ -517,8 +530,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
         break;
     case TX_ACK:
         ackPos = 0;
-        // Reset CRC ok flag to disable software acknowledgments until next received packet 
-        crcOk = false;
         ackNext();
         break;
     case RX_FRAME:
@@ -526,6 +537,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
         rxFIFO.mark();
         rxread = 0;
         frameRejected = false;
+        ackRequest = false;
         shouldAck = false;
         crcOk = false;
         break;
@@ -548,10 +560,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
       setFIFO(rxFIFO.length() > 0);
       frameRejected = true;
   }
-  
-  /* variables for the address recognition */
-  int destinationAddressMode = 0;
-  boolean decodeAddress = false;
+
   /* Receive a byte from the radio medium
    * @see se.sics.mspsim.chip.RFListener#receivedByte(byte)
    */
@@ -606,13 +615,16 @@ public class CC2420 extends Radio802154 implements USARTListener {
                           if (frameType == TYPE_DATA_FRAME || frameType == TYPE_CMD_FRAME) {
                               ackRequest = (fcf0 & ACK_REQUEST) > 0;
                               destinationAddressMode = (fcf1 >> 2) & 3;
+                              sourceAddressMode = (fcf1 >> 6) & 3;
                               /* check this !!! */
-                              if (addressDecode && destinationAddressMode != LONG_ADDRESS &&
-                                      destinationAddressMode != SHORT_ADDRESS) {
+                              if (addressDecode
+                                      && destinationAddressMode != LONG_ADDRESS
+                                      && destinationAddressMode != SHORT_ADDRESS
+                                      && !isPanCoordinator) {
                                   rejectFrame();
                               }
                           } else if (frameType == TYPE_BEACON_FRAME ||
-                                  frameType == TYPE_ACK_FRAME){
+                                  frameType == TYPE_ACK_FRAME) {
                               decodeAddress = false;
                               ackRequest = false;
                           } else if (addressDecode) {
@@ -694,7 +706,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
 
                   /* if either manual ack request (shouldAck) or autoack + ACK_REQ on package do ack! */
                   /* Autoack-mode + good CRC => autoack */
-                  if (((autoAck && ackRequest) || shouldAck) && crcOk) {
+                  if (ackRequest && (autoAck || shouldAck) && crcOk) {
                       setState(RadioState.TX_ACK_CALIBRATE);
                   } else {
                       setState(RadioState.RX_WAIT);
@@ -733,6 +745,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
           updateCCA();
           break;
       case REG_MDMCTRL0:
+          isPanCoordinator = (data & PAN_COORDINATOR) != 0;
           addressDecode = (data & ADR_DECODE) != 0;
           autoCRC = (data & ADR_AUTOCRC) != 0;
           autoAck = (data & AUTOACK) != 0;
@@ -1028,7 +1041,8 @@ public class CC2420 extends Radio802154 implements USARTListener {
         ackFramePending = data == REG_SACKPEND;
         if (stateMachine == RadioState.RX_FRAME) {
             shouldAck = true;
-        } else if (crcOk) {
+        } else if (crcOk && !frameRejected
+                && (stateMachine == RadioState.RX_SFD_SEARCH || stateMachine == RadioState.RX_WAIT)) {
             setState(RadioState.TX_ACK_CALIBRATE);
         }
         break;
@@ -1036,7 +1050,7 @@ public class CC2420 extends Radio802154 implements USARTListener {
       if (logLevel > INFO) {
         log("Unknown strobe command: " + data);
       }
-    break;
+      break;
     }
   }
 
