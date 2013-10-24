@@ -275,17 +275,6 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
     public static final int SHORT_ADDRESS = 2;
     public static final int LONG_ADDRESS = 3;
 
-
-    // The Operation modes of the CC2520
-    public static final int MODE_TXRX_OFF = 0x00;
-    public static final int MODE_RX_ON = 0x01;
-    public static final int MODE_TXRX_ON = 0x02;
-    public static final int MODE_POWER_OFF = 0x03;
-    public static final int MODE_MAX = MODE_POWER_OFF;
-    private static final String[] MODE_NAMES = new String[] {
-        "off", "listen", "transmit", "power_off"
-    };
-
     // State Machine - Datasheet Figure 30 page 85
     public enum RadioState {
         VREG_OFF(-2),
@@ -494,8 +483,6 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
             gpio[i] = new GPIO();
         }
 
-        setModeNames(MODE_NAMES);
-        setMode(MODE_POWER_OFF);
         rxFIFO.reset();
         overflow = false;
         reset();
@@ -1505,11 +1492,6 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
     /*****************************************************************************
      * Chip APIs
      *****************************************************************************/
-
-    @Override
-    public int getModeMax() {
-        return MODE_MAX;
-    }
 
     private String getLongAddress() {
         StringBuilder sb = new StringBuilder();

@@ -173,17 +173,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
   public static final int SHORT_ADDRESS = 2;
   public static final int LONG_ADDRESS = 3;
 
-  
-  // The Operation modes of the CC2420
-  public static final int MODE_TXRX_OFF = 0x00;
-  public static final int MODE_RX_ON = 0x01;
-  public static final int MODE_TXRX_ON = 0x02;
-  public static final int MODE_POWER_OFF = 0x03;
-  public static final int MODE_MAX = MODE_POWER_OFF;
-  private static final String[] MODE_NAMES = new String[] {
-    "off", "listen", "transmit", "power_off"
-  };
-
   // State Machine - Datasheet Figure 25 page 44
   public enum RadioState {
      VREG_OFF(-1),
@@ -418,8 +407,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
       
     registers[REG_SNOP] = 0;
     registers[REG_TXCTRL] = 0xa0ff;
-    setModeNames(MODE_NAMES);
-    setMode(MODE_POWER_OFF);
     currentFIFOP = false;
     rxFIFO.reset();
     overflow = false;
@@ -1446,10 +1433,6 @@ public class CC2420 extends Radio802154 implements USARTListener {
   /*****************************************************************************
    * Chip APIs
    *****************************************************************************/
-
-  public int getModeMax() {
-    return MODE_MAX;
-  }
 
   private String getLongAddress() {
       StringBuilder sb = new StringBuilder();

@@ -36,11 +36,23 @@ import se.sics.mspsim.core.MSP430Core;
  */
 public abstract class Radio802154 extends Chip implements RFListener, RFSource {
 
+    // The Operation modes of the 802.15.4 radios
+    public static final int MODE_TXRX_OFF = 0x00;
+    public static final int MODE_RX_ON = 0x01;
+    public static final int MODE_TXRX_ON = 0x02;
+    public static final int MODE_POWER_OFF = 0x03;
+    public static final int MODE_MAX = MODE_POWER_OFF;
+    private static final String[] MODE_NAMES = new String[] {
+      "off", "listen", "transmit", "power_off"
+    };
+
     protected RFListener rfListener;
     protected ChannelListener channelListener;
 
     public Radio802154(String id, String name, MSP430Core cpu) {
         super(id, name, cpu);
+        setModeNames(MODE_NAMES);
+        setMode(MODE_POWER_OFF);
     }
 
     public abstract boolean isReadyToReceive();
@@ -60,6 +72,11 @@ public abstract class Radio802154 extends Chip implements RFListener, RFSource {
 
     public abstract int getLQI();
     public abstract void setLQI(int lqi);
+
+    @Override
+    public int getModeMax() {
+        return MODE_MAX;
+    }
 
     @Override
     public synchronized void addRFListener(RFListener rf) {
