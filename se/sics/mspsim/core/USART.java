@@ -82,9 +82,9 @@ public class USART extends IOUnit implements SFRModule, DMATrigger, USARTSource 
 
   private USARTListener usartListener;
 
-  private int utxifg;
-  private int urxifg;
-  private int rxVector;
+  private final int utxifg;
+  private final int urxifg;
+  private final int rxVector;
 
   private int clockSource = 0;
   private int baudRate = 0;
@@ -161,16 +161,20 @@ public class USART extends IOUnit implements SFRModule, DMATrigger, USARTSource 
       this.dma = dma;
   }
 
-  
   public void reset(int type) {
+    clockSource = 0;
+    baudRate = 0;
+    tickPerByte = 1000;
     nextTXReady = cpu.cycles + 100;
     txShiftReg = nextTXByte = -1;
     transmitting = false;
+    receiving = false;
     clrBitIFG(urxifg);
     setBitIFG(utxifg); /* empty at start! */
     utctl |= UTCTL_TXEMPTY;
     txEnabled = false;
     rxEnabled = false;
+    spiMode = false;
   }
 
   public void enableChanged(int reg, int bit, boolean enabled) {
@@ -187,8 +191,8 @@ public class USART extends IOUnit implements SFRModule, DMATrigger, USARTSource 
 //    if ((bits & utxifg) > 0) {
 //        System.out.println(getName() + " Set utxifg");
 //    }
+    sfr.setBitIFG(uartID, bits);
     if (dma != null) {
-        sfr.setBitIFG(uartID, bits);
         /* set bit first, then trigger DMA transfer - this should
          * be made via a 1 cycle or so delayed action */
         if ((bits & urxifg) > 0) dma.trigger(this, 0);
