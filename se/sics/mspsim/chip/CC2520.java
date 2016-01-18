@@ -642,6 +642,7 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
             status &= ~STATUS_RSSI_VALID;
             memory[REG_RSSISTAT] = 0;
             setMode(MODE_TXRX_OFF);
+	    //System.out.printf("Mode after off command:"+getMode()+"\n");
             updateCCA();
             break;
 
@@ -887,9 +888,10 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
 
     /* API used in CC2520 SPI for both memory and registers */
     void writeMemory(int address, int data) {
-//        System.out.printf("CC2520: writing to %x => %x\n", address, data);
+       // System.out.printf("CC2520: writing to %x => %x\n", address, data);
         int oldValue = memory[address];
         memory[address] = data;
+        //System.out.printf("memory address["+ address+"], data[" + data+" ]");
         switch(address) {
         case REG_FRMFILT0:
             frameFilter = (data & FRAME_FILTER) != 0;
@@ -930,13 +932,15 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
 				fifopGPIO = gpio[0];
 			}
         	break;
-        case REG_FSCTRL: {
+        case REG_FREQCTRL: {
             ChannelListener listener = this.channelListener;
             if (listener != null) {
                 int oldChannel = activeChannel;
+               // System.out.printf("Before update act freqcc2520 " + activeChannel+"\n");
                 updateActiveFrequency();
                 if (oldChannel != activeChannel) {
                     listener.channelChanged(activeChannel);
+		  //  System.out.printf("Channel changed" + activeChannel+"\n");
                 }
             }
             break;
@@ -977,8 +981,10 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
 
         if (command == null) {
             command = cc2520SPI.getCommand(data);
+            //System.out.printf("Spi command found 2520:"+data+" command:"+command+"\n");//ELCO
             if (command == null) {
                 logw(WarningType.EMULATION_ERROR, "**** Warning - not implemented command on SPI: " + data);
+		
             } else if (DEBUG) {
                 if (!"SNOP".equals(command.name)) {
                     log("SPI command: " + command.name);
@@ -1006,9 +1012,10 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
     }
 
     void rxon() {
+        //System.out.printf("SRXON function\n");
         if(stateMachine == RadioState.IDLE) {
             setState(RadioState.RX_CALIBRATE);
-            //updateActiveFrequency();
+            //updateActiveFrequency();/
             if (DEBUG) {
                 log("Strobe RX-ON!!!");
             }
@@ -1019,14 +1026,16 @@ public class CC2520 extends Radio802154 implements USARTListener, SPIData {
 
     void rxtxoff() {
         if (DEBUG) {
-            log("Strobe RXTX-OFF!!! at " + cpu.cycles);
+            //System.out.printf("Strobe RXTX-OFF!!! at " + cpu.cycles+"\n");
             if (stateMachine == RadioState.TX_ACK ||
                     stateMachine == RadioState.TX_FRAME ||
                     stateMachine == RadioState.RX_FRAME) {
-                log("WARNING: turning off RXTX during " + stateMachine);
+               // System.out.printf("WARNING: turning off RXTX during " + stateMachine+"\n");
             }
         }
         setState(RadioState.IDLE);
+        //System.out.printf("radio state: "+getState()+"\n");
+        
     }
 
     void stxon() {

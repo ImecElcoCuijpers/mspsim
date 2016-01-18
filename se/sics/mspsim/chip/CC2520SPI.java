@@ -119,6 +119,7 @@ public class CC2520SPI {
             new SPICommand("STXCAL 0 1 0 0 0 0 0 1"),
             new SPICommand("SRXON 0 1 0 0 0 0 1 0") {
                 public void executeSPICommand() {
+		    //System.out.printf("SRXON command\n");
                     cc2520.rxon();
                 }
             },
@@ -135,6 +136,7 @@ public class CC2520SPI {
             new SPICommand("SRFOFF 0 1 0 0 0 1 0 1") {
                 public void executeSPICommand() {
                     cc2520.rxtxoff();
+		    //System.out.printf("SRF going OFF\n");
                 }
             },
             new SPICommand("SXOSCOFF 0 1 0 0 0 1 1 0") {

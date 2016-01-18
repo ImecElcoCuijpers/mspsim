@@ -64,7 +64,8 @@ public class WismoteNode extends GenericNode implements PortListener, USARTListe
     public static final int CC2520_FIFO = 5;
     public static final int CC2520_CCA = 7;
     /* P2.0 - Input: SFD from CC2520 */
-    public static final int CC2520_SFD = 0;
+//    public static final int CC2520_SFD = 0;
+    public static final int CC2520_SFD = 1;
     /* P3.0 - Output: SPI Chip Select (CS_N) */
     public static final int CC2520_CHIP_SELECT = 0x01;
     /* P4.3 - Output: VREG_EN to CC2520 */
@@ -163,8 +164,12 @@ public class WismoteNode extends GenericNode implements PortListener, USARTListe
 
         IOPort port2 = cpu.getIOUnit(IOPort.class, "P2");
         port2.addPortListener(this);
+
+        IOPort port4 = cpu.getIOUnit(IOPort.class, "P4");
+        port4.addPortListener(this);
+
         cpu.getIOUnit(IOPort.class, "P3").addPortListener(this);
-        cpu.getIOUnit(IOPort.class, "P4").addPortListener(this);
+
         cpu.getIOUnit(IOPort.class, "P5").addPortListener(this);
         cpu.getIOUnit(IOPort.class, "P8").addPortListener(this);
 
@@ -175,14 +180,15 @@ public class WismoteNode extends GenericNode implements PortListener, USARTListe
             radio.setGPIO(1, port1, CC2520_FIFO);
             radio.setGPIO(3, port1, CC2520_CCA);
             radio.setGPIO(2, port1, CC2520_FIFOP);
-            radio.setGPIO(4, port2, CC2520_SFD);
+            radio.setGPIO(4, port4, CC2520_SFD);
 
             ((USARTSource) usart0).addUSARTListener(this);
         } else {
             throw new EmulationException("Could not setup wismote mote - missing USCI B0");
         }
         leds = new Leds(cpu, LEDS);
-        button = new Button("Button", cpu, port1, BUTTON_PIN, true);
+       // button = new Button("Button", cpu, port1, BUTTON_PIN, true);
+	//button = new Button("Button", cpu, port4, 1, true);
 
         IOUnit usart = cpu.getIOUnit("USCI A1");
         if (usart instanceof USARTSource) {
